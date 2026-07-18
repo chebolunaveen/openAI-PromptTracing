@@ -1,0 +1,19 @@
+{
+  "name": "prompttrace",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:api": "npm --workspace @prompttrace/api run dev",
+    "dev:web": "npm --workspace @prompttrace/web run dev",
+    "build": "npm run typecheck && npm --workspaces --if-present run build",
+    "typecheck": "npm --workspaces --if-present run typecheck",
+    "test": "npm --workspaces --if-present run test"
+  },
+  "engines": {
+    "node": ">=22.5"
+  }
+}
