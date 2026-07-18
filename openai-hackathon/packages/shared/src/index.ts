@@ -20,6 +20,12 @@ export interface ToolExecution {
   result: string;
 }
 
+export interface ToolApproval {
+  toolCallId: string;
+  decision: "approved" | "rejected";
+  decidedAt: string;
+}
+
 export type PolicyDecision = "allow" | "require_approval" | "block";
 
 export interface ToolPolicyDecision {
@@ -32,7 +38,7 @@ export interface ToolPolicyDecision {
 export interface TraceEvent {
   id: string;
   timestamp: string;
-  type: "user_request" | "document_received" | "security_scan_completed" | "agent_response" | "tool_proposed" | "tool_policy_evaluated" | "tool_executed" | "replay_completed";
+  type: "user_request" | "document_received" | "security_scan_completed" | "agent_response" | "tool_proposed" | "tool_policy_evaluated" | "tool_executed" | "human_approval_decided" | "replay_completed";
   source?: SourceKind;
   summary: string;
 }
@@ -62,8 +68,10 @@ export interface Trace {
   createdAt: string;
   events: TraceEvent[];
   security: SecurityAssessment;
+  proposedToolCalls: ProposedToolCall[];
   policyDecisions: ToolPolicyDecision[];
   toolExecutions: ToolExecution[];
+  approvals: ToolApproval[];
 }
 
 export interface AgentRunResult {
