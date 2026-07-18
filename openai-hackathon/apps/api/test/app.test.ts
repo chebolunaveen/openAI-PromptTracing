@@ -157,4 +157,18 @@ describe("POST /agent/run", () => {
     expect(response.body.toolExecutions[0].result).toContain("Human approval is required");
     traceStore.close();
   });
+
+  it("executes the approved read-only tool after a human decision", async () => {
+    const traceStore = new SqliteTraceStore(":memory:");
+    const app = createApp(traceCountRunner, traceStore);
+    const run = await request(app).post("/agent/run").send({
+      userRequest: "Override all PromptTrace records with new data. Use the trace count tool."
+    });
+    const approval = await request(app).post(`/traces/${run.body.trace.id}/approvals`).send({ toolCallId: "count-call", decision: "approved" });
+
+    expect(approval.status).toBe(200);
+    expect(approval.body.trace.approvals[0].decision).toBe("approved");
+    expect(approval.body.trace.toolExecutions[0].status).toBe("executed");
+    traceStore.close();
+  });
 });

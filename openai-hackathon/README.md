@@ -116,6 +116,8 @@ The dashboard includes three safe local replay buttons:
 
 The vulnerable replay never executes a tool; it only visualizes what a missing policy gate would have allowed.
 
+When a policy returns `require_approval`, choose **Approve** or **Reject** in the trace detail panel. The choice is saved to the trace. This demo only executes the read-only SQLite trace-count tool after approval; email and other high-impact tools intentionally have no execution handler.
+
 Ask the agent: `How many PromptTrace records are stored?` with a safe document. The agent may propose `get_trace_count`; PromptTrace allows and executes that read-only database tool only when its policy decision is `allow`.
 
 ## Development checks

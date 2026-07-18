@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import express from "express";
 import { z } from "zod";
-import type { AgentRunResult, DocumentInput, ToolExecution, Trace, TraceEvent } from "@prompttrace/shared";
+import type { AgentRunResult, DocumentInput, ToolApproval, ToolExecution, Trace, TraceEvent } from "@prompttrace/shared";
 import type { AgentResult, AgentRunner } from "./agent.js";
 import type { TraceStore } from "./trace-store.js";
 import { activeToolPolicies, evaluateToolPolicies, scanDocument } from "@prompttrace/security-engine";
@@ -26,6 +26,11 @@ const securityScanSchema = z.object({
   content: z.string().min(1).max(100_000),
   title: z.string().min(1).max(200).default("Scan-only input"),
   source: z.enum(["user", "uploaded_document", "web", "rag", "tool_output"]).default("user")
+});
+
+const approvalSchema = z.object({
+  toolCallId: z.string().min(1),
+  decision: z.enum(["approved", "rejected"])
 });
 
 type RunInput = z.infer<typeof requestSchema>;
@@ -78,7 +83,7 @@ async function buildTrace(
 
   for (const toolCall of agentResult.proposedToolCalls) {
     const decision = policyDecisions.find((item) => item.toolCallId === toolCall.id);
-    events.push({ id: randomUUID(), timestamp: new Date().toISOString(), type: "tool_proposed", summary: `${toolCall.name} proposed; never executed by this demo` });
+    events.push({ id: randomUUID(), timestamp: new Date().toISOString(), type: "tool_proposed", summary: `${toolCall.name} proposed; awaiting policy decision` });
     events.push({
       id: randomUUID(),
       timestamp: new Date().toISOString(),
@@ -91,7 +96,16 @@ async function buildTrace(
     events.push({ id: randomUUID(), timestamp: new Date().toISOString(), type: "replay_completed", summary: `${mode} replay completed` });
   }
 
-  const trace: Trace = { id: traceId, createdAt: now, events, security, policyDecisions, toolExecutions: [] };
+  const trace: Trace = {
+    id: traceId,
+    createdAt: now,
+    events,
+    security,
+    proposedToolCalls: agentResult.proposedToolCalls,
+    policyDecisions,
+    toolExecutions: [],
+    approvals: []
+  };
   traceStore.save(trace);
 
   for (const toolCall of agentResult.proposedToolCalls) {
@@ -161,6 +175,47 @@ export function createApp(runner: AgentRunner, traceStore: TraceStore) {
       return response.status(404).json({ error: "Trace not found" });
     }
     return response.json({ trace });
+  });
+
+  app.post("/traces/:id/approvals", (request, response) => {
+    const parsed = approvalSchema.safeParse(request.body);
+    if (!parsed.success) return response.status(400).json({ error: "Invalid approval request" });
+
+    const trace = traceStore.findById(request.params.id);
+    if (!trace) return response.status(404).json({ error: "Trace not found" });
+    const toolCall = trace.proposedToolCalls?.find((item) => item.id === parsed.data.toolCallId);
+    const policy = trace.policyDecisions?.find((item) => item.toolCallId === parsed.data.toolCallId);
+    if (!toolCall || !policy) return response.status(404).json({ error: "Tool call not found in trace" });
+    if (policy.decision !== "require_approval") {
+      return response.status(409).json({ error: "This tool call does not require human approval" });
+    }
+    if (trace.approvals?.some((item) => item.toolCallId === toolCall.id)) {
+      return response.status(409).json({ error: "This tool call already has an approval decision" });
+    }
+
+    const approval: ToolApproval = { toolCallId: toolCall.id, decision: parsed.data.decision, decidedAt: new Date().toISOString() };
+    trace.approvals = [...(trace.approvals ?? []), approval];
+    trace.events.push({
+      id: randomUUID(),
+      timestamp: approval.decidedAt,
+      type: "human_approval_decided",
+      summary: `${toolCall.name}: human ${approval.decision}`
+    });
+
+    const executionIndex = trace.toolExecutions.findIndex((item) => item.toolCallId === toolCall.id);
+    let execution: ToolExecution;
+    if (approval.decision === "rejected") {
+      execution = { toolCallId: toolCall.id, toolName: toolCall.name, status: "not_executed", result: "Human approver rejected this tool call." };
+    } else if (toolCall.name === "get_trace_count") {
+      execution = { toolCallId: toolCall.id, toolName: toolCall.name, status: "executed", result: `SQLite currently stores ${traceStore.count()} trace(s), including this trace.` };
+    } else {
+      execution = { toolCallId: toolCall.id, toolName: toolCall.name, status: "not_executed", result: "Approved, but this demo has no execution handler for this tool." };
+    }
+    if (executionIndex >= 0) trace.toolExecutions[executionIndex] = execution;
+    else trace.toolExecutions.push(execution);
+    trace.events.push({ id: randomUUID(), timestamp: new Date().toISOString(), type: "tool_executed", summary: `${toolCall.name}: ${execution.status} — ${execution.result}` });
+    traceStore.save(trace);
+    return response.status(200).json({ trace });
   });
 
   app.post("/demo/replay", async (request, response) => {

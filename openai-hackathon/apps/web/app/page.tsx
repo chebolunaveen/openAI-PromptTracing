@@ -7,6 +7,7 @@ const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:400
 type Decision = { toolCallId: string; toolName: string; decision: "allow" | "require_approval" | "block"; reasons: string[] };
 type Finding = { ruleId: string; severity: string; score: number; evidence: string; explanation: string };
 type Execution = { toolCallId: string; toolName: string; status: "executed" | "not_executed"; result: string };
+type Approval = { toolCallId: string; decision: "approved" | "rejected"; decidedAt: string };
 type Trace = {
   id: string;
   createdAt: string;
@@ -14,6 +15,8 @@ type Trace = {
   security: { score: number; level: "low" | "medium" | "high" | "critical"; recommendation: string; findings: Finding[] };
   policyDecisions: Decision[];
   toolExecutions: Execution[];
+  proposedToolCalls: { id: string; name: string }[];
+  approvals: Approval[];
 };
 
 function normalizeTrace(trace: Partial<Trace>): Trace {
@@ -28,7 +31,9 @@ function normalizeTrace(trace: Partial<Trace>): Trace {
       findings: []
     },
     policyDecisions: trace.policyDecisions ?? [],
-    toolExecutions: trace.toolExecutions ?? []
+    toolExecutions: trace.toolExecutions ?? [],
+    proposedToolCalls: trace.proposedToolCalls ?? [],
+    approvals: trace.approvals ?? []
   };
 }
 
@@ -73,6 +78,18 @@ export default function HomePage() {
     }
   };
 
+  const decideApproval = async (toolCallId: string, decision: "approved" | "rejected") => {
+    if (!selected) return;
+    try {
+      const result = await api<{ trace: Trace }>(`/traces/${selected.id}/approvals`, { method: "POST", body: JSON.stringify({ toolCallId, decision }) });
+      setSelected(normalizeTrace(result.trace));
+      await refresh();
+      setMessage(`Tool call ${decision}.`);
+    } catch {
+      setMessage("Approval request failed. The tool may already have a decision.");
+    }
+  };
+
   return (
     <main className="shell">
       <div className="eyebrow">PROMPTTRACE · AI AGENT SECURITY OBSERVABILITY</div>
@@ -99,14 +116,14 @@ export default function HomePage() {
         </aside>
 
         <section className="panel">
-          {!selected ? <p className="empty">Choose a trace to inspect its security path.</p> : <TraceDetail trace={selected} />}
+          {!selected ? <p className="empty">Choose a trace to inspect its security path.</p> : <TraceDetail trace={selected} onApproval={decideApproval} />}
         </section>
       </section>
     </main>
   );
 }
 
-function TraceDetail({ trace }: { trace: Trace }) {
+function TraceDetail({ trace, onApproval }: { trace: Trace; onApproval: (toolCallId: string, decision: "approved" | "rejected") => void }) {
   return <>
     <h2>Attack trace</h2>
     <div className="risk"><div className={`score ${trace.security.level}`}>{trace.security.score}</div><div><strong className={trace.security.level}>{trace.security.level.toUpperCase()} RISK</strong><div className="subtle">Recommendation: <code>{trace.security.recommendation}</code></div></div></div>
@@ -119,7 +136,13 @@ function TraceDetail({ trace }: { trace: Trace }) {
     <h3>Detection findings</h3>
     {trace.security.findings.length === 0 ? <p className="subtle">No suspicious patterns matched the current deterministic rules.</p> : <ul>{trace.security.findings.map((finding) => <li key={finding.ruleId}><strong>{finding.ruleId} · {finding.severity} · +{finding.score}</strong><br />{finding.explanation}<br /><code>{finding.evidence}</code></li>)}</ul>}
     <h3>Policy decisions</h3>
-    {trace.policyDecisions.length === 0 ? <p className="subtle">The agent did not propose a tool action.</p> : <ul>{trace.policyDecisions.map((decision) => <li key={decision.toolCallId}><strong className={decision.decision === "block" ? "critical" : decision.decision === "require_approval" ? "medium" : "low"}>{decision.toolName}: {decision.decision}</strong><br />{decision.reasons.join(" ")}</li>)}</ul>}
+    {trace.policyDecisions.length === 0 ? <p className="subtle">The agent did not propose a tool action.</p> : <ul>{trace.policyDecisions.map((decision) => {
+      const approval = trace.approvals.find((item) => item.toolCallId === decision.toolCallId);
+      return <li key={decision.toolCallId}><strong className={decision.decision === "block" ? "critical" : decision.decision === "require_approval" ? "medium" : "low"}>{decision.toolName}: {decision.decision}</strong><br />{decision.reasons.join(" ")}
+        {decision.decision === "require_approval" && !approval && <div className="controls"><button onClick={() => onApproval(decision.toolCallId, "approved")}>Approve</button><button onClick={() => onApproval(decision.toolCallId, "rejected")}>Reject</button></div>}
+        {approval && <div className="subtle">Human decision: <strong>{approval.decision}</strong></div>}
+      </li>;
+    })}</ul>}
     <h3>Tool execution</h3>
     {trace.toolExecutions.length === 0 ? <p className="subtle">No tool execution was recorded.</p> : <ul>{trace.toolExecutions.map((execution) => <li key={execution.toolCallId}><strong className={execution.status === "executed" ? "low" : "medium"}>{execution.toolName}: {execution.status}</strong><br />{execution.result}</li>)}</ul>}
     <h3>Timeline</h3>
